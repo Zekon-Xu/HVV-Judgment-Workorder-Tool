@@ -1,0 +1,13 @@
+{
+  "name": "自定义手动模板",
+  "version": 1,
+  "description": "空白手动模板。可逐项添加字段名和字段值，或上传样本文本生成字段。",
+  "created_at": "",
+  "field_schema": {},
+  "field_aliases": {},
+  "field_bindings": {},
+  "local_rules": [],
+  "ai_prompt": "",
+  "extra_prompt": "",
+  "sample_text": ""
+}

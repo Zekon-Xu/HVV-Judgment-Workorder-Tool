@@ -1,0 +1,11 @@
+{
+  "time": "2026-01-01 12:00:00",
+  "attack_ip": "198.51.100.10",
+  "target_ip": "10.0.0.20",
+  "xff": "203.0.113.5",
+  "domain_url": "suspicious.example",
+  "alert_level": "高危",
+  "attack_name": "示例扫描告警",
+  "event_type": "工具扫描",
+  "attack_result": "企图"
+}

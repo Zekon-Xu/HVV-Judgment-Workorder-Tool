@@ -1,0 +1,17 @@
+settings/history_cache.json
+settings/whitelist.json
+settings/original_whitelist.json
+settings/settings.json
+settings/projects/*.json
+settings/templates/*.local.json
+!settings/settings.json
+!settings/whitelist.json
+!settings/original_whitelist.json
+!settings/projects/.gitkeep
+build/
+build_*/
+dist/
+release/
+release_*/
+__pycache__/
+*.pyc

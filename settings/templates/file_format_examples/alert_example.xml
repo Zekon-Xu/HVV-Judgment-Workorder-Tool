@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<alert>
+  <time>2026-01-01 12:00:00</time>
+  <attack_ip>198.51.100.10</attack_ip>
+  <target_ip>10.0.0.20</target_ip>
+  <xff>203.0.113.5</xff>
+  <domain_url>suspicious.example</domain_url>
+  <alert_level>高危</alert_level>
+  <attack_name>示例扫描告警</attack_name>
+  <event_type>工具扫描</event_type>
+  <attack_result>企图</attack_result>
+</alert>
