@@ -5,6 +5,7 @@ import os
 import tempfile
 import unittest
 from copy import deepcopy
+from contextlib import ExitStack
 from io import BytesIO
 from pathlib import Path
 from unittest import mock
@@ -522,14 +523,19 @@ class TemplateTests(unittest.TestCase):
 
 class ProjectProfileTests(unittest.TestCase):
     def _patch_paths(self, root: Path):
-        return mock.patch.multiple(
+        stack = ExitStack()
+        stack.enter_context(mock.patch.multiple(
             project_profiles,
             PROJECT_PROFILES_DIR=root / "项目配置",
             SETTINGS_PATH=root / "config" / "settings.json",
             WHITELIST_PATH=root / "config" / "whitelist.json",
             HISTORY_CACHE_PATH=root / "config" / "history_cache.json",
             TEMPLATES_DIR=root / "config" / "templates",
-        )
+        ))
+        # Project bundle tests must never read the developer's active project.
+        stack.enter_context(mock.patch.object(default_whitelist_module, "SETTINGS_PATH", root / "config" / "settings.json"))
+        stack.enter_context(mock.patch.object(default_whitelist_module, "CONFIG_DIR", root / "config"))
+        return stack
 
     def test_save_and_restore_project_bundle(self) -> None:
         with tempfile.TemporaryDirectory() as tmp, self._patch_paths(Path(tmp)):
