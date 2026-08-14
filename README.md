@@ -6,7 +6,7 @@ Windows 单文件桌面工具。支持文本、CSV/TSV、JSON、XML、Excel、HT
 
 - 源码运行：`run.bat` 或 `python main.py`
 - 重新打包：`build_exe.bat`
-- 最终发布：`release_clean\工单生成工具.exe`
+- 最终发布：仓库根目录的 `工单生成工具.exe`（构建目录为 `release\工单生成工具.exe`）
 
 首次启动只在 EXE 旁生成 `settings` 运行目录；历史缓存、白名单、项目配置和模板均归档在该目录内。仓库和发布版均为纯白板：无客户数据、无项目配置、无 API Key、无历史记录、无本地文件路径、无 Logo、无白名单和公司网段。
 
