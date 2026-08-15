@@ -93,9 +93,9 @@ from .template_store import (
     template_from_sample,
     sample_fields_from_text,
 )
-from .threatbook import ThreatBookClient, ThreatBookError, indicator_type
+from .threatbook import ThreatBookClient, ThreatBookError, domain_report_url, indicator_type
 from .tray_icon import TrayController
-from .whitelist import WhitelistEngine, check_alert_whitelist_gate, extract_ips
+from .whitelist import WhitelistEngine, check_alert_whitelist_gate, extract_indicators, extract_ips
 from .whitelist_import import merge_rules_from_file
 
 IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".bmp", ".webp", ".gif", ".tif", ".tiff"}
@@ -147,7 +147,7 @@ def _whitelist_items_text(items: list[dict[str, Any]], *, reasons: bool = False)
 
 
 def _work_order_ip_shortcuts(order: WorkOrder | None, generated_output: str = "") -> list[str]:
-    """Return unique IPs in the current order, preserving the order shown to users."""
+    """Return unique IPs and IOC domains in the current order."""
     values: list[str] = []
     if order is not None:
         values.extend(
@@ -161,6 +161,9 @@ def _work_order_ip_shortcuts(order: WorkOrder | None, generated_output: str = ""
         for ip in extract_ips(str(value or "")):
             if ip not in result:
                 result.append(ip)
+        for domain in extract_indicators(str(value or "")):
+            if domain not in result:
+                result.append(domain)
     return result
 
 
@@ -354,7 +357,7 @@ class ThreatBookLookupDialog(ctk.CTkToplevel):
         if hasattr(master, "_colors"):
             shortcut_label_kwargs["text_color"] = master._colors()["text_dim"]
         ctk.CTkLabel(
-            self, text="当前工单 IP", anchor="w", **shortcut_label_kwargs,
+            self, text="当前工单 IP / 域名", anchor="w", **shortcut_label_kwargs,
         ).pack(fill="x", padx=18, pady=(0, 5))
         shortcuts = ctk.CTkFrame(self, fg_color="transparent")
         shortcuts.pack(fill="both", expand=True, padx=14, pady=(0, 10))
@@ -371,7 +374,7 @@ class ThreatBookLookupDialog(ctk.CTkToplevel):
         for column in range(columns):
             shortcuts.grid_columnconfigure(column, weight=1)
         if not current_ips:
-            ctk.CTkLabel(shortcuts, text="当前工单没有识别到 IP").pack(anchor="w", padx=6, pady=8)
+            ctk.CTkLabel(shortcuts, text="当前工单没有识别到 IP 或域名").pack(anchor="w", padx=6, pady=8)
 
         ctk.CTkButton(
             self, text="取消", width=90, height=32, corner_radius=8,
@@ -3530,7 +3533,12 @@ class WorkOrderApp(ctk.CTk):
             for indicator in selected:
                 try:
                     result = ThreatBookClient(snapshot).lookup(indicator)
-                    lines.append(result.display_text())
+                    if result.indicator_type == "domain":
+                        permalink = str(result.payload.get("permalink") or domain_report_url(indicator))
+                        webbrowser.open(permalink, new=2)
+                        lines.append(f"{result.indicator}\n已打开微步域名详情页：{permalink}")
+                    else:
+                        lines.append(result.display_text())
                 except Exception as exc:
                     lines.append(f"{indicator}\n查询失败：{exc}")
             content = "\n\n".join(lines)

@@ -14,7 +14,7 @@ from typing import Any
 
 from .constants import ATTACK_TYPE_HINTS, MONITOR_SOURCE_IP
 from .order_builder import normalize_event_level
-from .whitelist import extract_ips, is_private_ip
+from .whitelist import extract_indicators, extract_ips, is_private_ip
 
 try:
     import openpyxl
@@ -53,7 +53,7 @@ DEFAULT_FIELD_ALIASES: dict[str, list[str]] = {
     ],
     "xff": ["XFF", "X-Forwarded-For", "x_forwarded_for", "forwarded_for", "xff_ip"],
     "domain_url": [
-        "域名URL", "URL", "URI", "请求URL", "请求地址", "访问地址", "资源",
+        "域名URL", "域名", "URL", "URI", "IOC/URI", "请求URL", "请求地址", "访问地址", "资源",
         "request_url", "request_uri", "url", "uri", "domain", "host", "IOC", "IOC域名",
     ],
     "alert_level": ["告警级别", "危害等级", "威胁等级", "风险等级", "severity", "risk_level", "alert_level"],
@@ -312,15 +312,50 @@ def _pick_time(text: str, field_aliases: dict[str, Any] | None = None) -> str:
 
 
 def _pick_url(text: str, field_aliases: dict[str, Any] | None = None) -> str:
-    labeled = _labeled_text_value(
-        _field_aliases("domain_url", field_aliases), text, max_length=240
-    )
+    labels = _field_aliases("domain_url", field_aliases)
+    fallback = ""
+
+    def candidate(value: str) -> str:
+        cleaned = _clean_field_value(value)[:240].rstrip(").,，；;")
+        if not cleaned:
+            return ""
+        # Preserve a complete URL in the automatic recognition field.
+        if re.search(r"https?://", cleaned, re.I):
+            url = re.search(r"https?://[^\s,，;；|]+", cleaned, re.I)
+            return url.group(0).rstrip(").,，；;") if url else cleaned
+        # For IOC/URI values, normalize a bare host to the host itself.
+        if extract_indicators(cleaned):
+            return extract_indicators(cleaned)[0]
+        return ""
+
+    labeled = _labeled_text_value(labels, text, max_length=240)
     if labeled:
-        return labeled.rstrip(").,，；;")
+        value = candidate(labeled)
+        if value:
+            return value
+        fallback = labeled.rstrip(").,，；;")
+
+    # _labeled_text_value returns the first matching label. Inspect every
+    # IOC/URI/domain-labelled value too, because an earlier ``URI: /path``
+    # must not hide a later ``IOC: bad.example``.
+    label = _label_pattern(labels)
+    labelled_value = re.compile(
+        rf"(?im)^[ \t]*[\"']?{label}[\"']?[ \t]*(?::|：|=|\t+|[ ]{{2,}})?[ \t]*(?:\r?\n[ \t]*)?([^\n\r]*)$"
+    )
+    for match in labelled_value.finditer(text):
+        value = candidate(match.group(1))
+        if value:
+            return value
     # 优先完整 URL
     m = re.search(r"https?://[^\s\"'<>]+", text, re.I)
     if m:
         return m.group(0).rstrip(").,，；;")
+
+    # A bare domain may appear after an unlabelled OCR line such as
+    # ``IOC类型 / 域名 / IOC / example.org``.
+    indicators = extract_indicators(text)
+    if indicators:
+        return indicators[0]
     m = re.search(
         r"(?:域名URL|URI|URL|请求URL|资源)[:：\t ]*([^\n\r]{3,200})",
         text,
@@ -334,7 +369,7 @@ def _pick_url(text: str, field_aliases: dict[str, Any] | None = None) -> str:
     m = re.search(r"(/[A-Za-z0-9_\-./%?=&:;]{8,160})", text)
     if m:
         return m.group(1)
-    return ""
+    return fallback if fallback.startswith("/") else ""
 
 
 def _labeled_ip_value(labels: list[str], text: str) -> str:

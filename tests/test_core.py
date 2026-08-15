@@ -45,7 +45,7 @@ from app.settings_store import (
     normalize_ai_profiles,
     upsert_ai_profile,
 )
-from app.threatbook import ThreatBookClient, ThreatBookError, indicator_type
+from app.threatbook import ThreatBookClient, ThreatBookError, domain_report_url, indicator_type
 from app.whitelist import WhitelistEngine, check_alert_whitelist_gate, prune_redundant_single_ip_rules
 from app.whitelist_import import extract_rules_from_file, merge_rules_from_file
 
@@ -336,15 +336,34 @@ class ThreatBookTests(unittest.TestCase):
         self.assertIn("scanner", result.summary)
         self.assertIn("scene/ip_reputation", get.call_args.args[0])
 
-    def test_domain_lookup_uses_domain_query_endpoint(self) -> None:
-        response = mock.Mock(status_code=200)
-        response.json.return_value = {"response_code": 0, "data": {"zdg16881988.com": {"judgments": ["Malware"]}}}
-        settings = {"threatbook_enabled": True, "threatbook_api_key": "key"}
-        with mock.patch("app.threatbook.httpx.get", return_value=response) as get:
+    def test_domain_lookup_uses_public_report_without_domain_api_permission(self) -> None:
+        settings = {"threatbook_enabled": False, "threatbook_api_key": ""}
+        with mock.patch("app.threatbook.httpx.get") as get:
             result = ThreatBookClient(settings).lookup("zdg16881988.com")
-        self.assertIn("domain/query", get.call_args.args[0])
-        self.assertIn("Malware", result.summary)
+        get.assert_not_called()
+        self.assertEqual(result.indicator_type, "domain")
+        self.assertEqual(result.payload["query_mode"], "web")
+        self.assertEqual(result.payload["permalink"], domain_report_url("zdg16881988.com"))
         self.assertIn("https://x.threatbook.com/v5/domain/zdg16881988.com", result.summary)
+
+    def test_ioc_uri_domain_is_recovered_after_ai_omits_domain_field(self) -> None:
+        body = "攻击IP：203.0.113.8\nURI：/login\nIOC类型\n域名\nIOC\nzdg16881988.com"
+        alert = _apply_standard_output(
+            json.dumps({
+                "standard_fields": {"attack_ip": "203.0.113.8", "domain_url": ""},
+                "ocr_text": body,
+            }, ensure_ascii=False)
+        )
+        self.assertEqual(alert.domain_url, "zdg16881988.com")
+        self.assertIn("确定性规则补取 IOC/URI 域名", alert.notes)
+
+    def test_inline_uri_does_not_absorb_following_fields(self) -> None:
+        alert = parse_text("uri=https://zdg16881988.com/path?a=1 src_ip=203.0.113.8")
+        self.assertEqual(alert.domain_url, "https://zdg16881988.com/path?a=1")
+
+    def test_current_order_shortcuts_include_ioc_domains(self) -> None:
+        order = WorkOrder(attack_ip="203.0.113.8", domain_url="https://zdg16881988.com/path")
+        self.assertEqual(_work_order_ip_shortcuts(order), ["203.0.113.8", "zdg16881988.com"])
 
     def test_single_ip_lookup_matches_containing_cidr_and_prunes_redundant_rule(self) -> None:
         rules, removed = prune_redundant_single_ip_rules([

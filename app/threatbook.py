@@ -14,6 +14,14 @@ import httpx
 DEFAULT_BASE_URL = "https://api.threatbook.cn/v3"
 
 
+def domain_report_url(value: str) -> str:
+    """Return the public X intelligence page for a normalized domain."""
+    domain = (value or "").strip().lower().rstrip(".")
+    if indicator_type(domain) != "domain":
+        raise ThreatBookError("仅支持域名详情页查询")
+    return f"https://x.threatbook.com/v5/domain/{domain}"
+
+
 class ThreatBookError(RuntimeError):
     pass
 
@@ -103,14 +111,24 @@ class ThreatBookClient:
         return self.enabled and bool(self.api_key) and self.base_url.startswith(("http://", "https://"))
 
     def lookup(self, indicator: str) -> ThreatBookResult:
+        kind = indicator_type(indicator)
+        # Domain API access is a separately permissioned product. Always use
+        # the public X intelligence page for domains so a valid domain never
+        # fails with "没有访问接口权限" because of the API package.
+        if kind == "domain":
+            normalized = indicator.strip().lower().rstrip(".")
+            permalink = domain_report_url(normalized)
+            return ThreatBookResult(
+                normalized,
+                kind,
+                f"微步域名情报：{normalized}\n已打开详情页：{permalink}",
+                {"query_mode": "web", "permalink": permalink},
+            )
         if not self.enabled:
             raise ThreatBookError("微步情报未启用，请在配置中心启用并保存 API Key")
         if not self.api_key:
             raise ThreatBookError("微步 API Key 为空")
-        kind = indicator_type(indicator)
-        # Domain analysis is exposed at /v3/domain/query. The old
-        # scene/domain_reputation path returns "Invalid Api method".
-        endpoint = "scene/ip_reputation" if kind == "ip" else "domain/query"
+        endpoint = "scene/ip_reputation"
         url = f"{self.base_url}/{endpoint}"
         try:
             response = httpx.get(

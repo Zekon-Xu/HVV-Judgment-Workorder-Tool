@@ -44,12 +44,27 @@ def _annotate_company_departments(alert: ExtractedAlert) -> ExtractedAlert:
             alert.notes.append(note)
     return alert
 
+
+def _ensure_domain_from_evidence(
+    alert: ExtractedAlert,
+    evidence: str,
+    template: dict[str, Any] | None = None,
+) -> ExtractedAlert:
+    """Fill a missing domain from deterministic IOC/URI parsing after AI output."""
+    if alert.domain_url.strip() or not evidence.strip():
+        return alert
+    parsed = parse_text(evidence, field_aliases=(template or {}).get("field_aliases"))
+    if parsed.domain_url:
+        alert.domain_url = parsed.domain_url
+        alert.notes.append("确定性规则补取 IOC/URI 域名")
+    return alert
+
 SYSTEM_EXTRACT = """清洗传入内容并作研判，再按当前模板和标准研判结构生成结果。
 你是安全运营告警字段清洗助手。只根据输入中明确出现的证据提取字段，不得臆造；外部情报只能作为辅助证据，不能替代原始告警字段。公司内网网段仅用于部门归属判断，绝不能因此把IP判为白名单：攻击IP命中时说明攻击来源部门，目标/受害/目的IP命中时说明受攻击部门。
 如果用户消息提供了模板字段，先输出“【当前模板工单初版】”，严格按模板字段名和顺序逐行输出，不得增加、删除或改名；没有证据的值留空。
 然后输出“【标准研判字段】”，每个字段独占一行，供本地规则使用。标准字段之后追加“研判依据”和“处置依据”，各用一行简述可核验的证据，不要输出隐藏推理过程。标准字段顺序必须是：
 时间、攻击IP、目标IP、XFF、域名URL、告警级别、攻击名称、事件类型、事件等级、攻击结果、是否白名单、处置建议。
-源IP/攻击者是攻击IP，目的IP/受害者是目标IP；不要把探针IP或数据源IP当成攻击IP。
+源IP/攻击者是攻击IP，目的IP/受害者是目标IP；不要把探针IP或数据源IP当成攻击IP。原文中 IOC、IOC域名、域名、URI、URL 或 host 字段出现的域名/URL 必须原样填入“域名URL”，即使建议或研判字段没有提到它，也不能留空。
 事件等级默认五级；企图、拦截、未成功均算攻击失败。处置建议只允许两类固定句式：外部非白名单公网攻击源写“封禁 <IP>”；内网可疑行为源写“核实 <IP> 的任务授权情况；已授权则加白，未授权则隔离并排查源主机”。不要对受害/目标IP使用封禁或授权核实句式，不要声称已经执行处置。
 
 格式示例（内容仅示范结构，不得照抄）：
@@ -103,6 +118,7 @@ def _apply_json_to_alert(data: dict[str, Any], source_file: str = "", template: 
     advice = str(standard.get("advice") or "").strip()
     ocr = str(data.get("ocr_text") or data.get("raw_text") or "").strip()
     alert.raw_text = ocr
+    _ensure_domain_from_evidence(alert, ocr, template)
     alert.ai_output = json.dumps(data, ensure_ascii=False, indent=2)
     raw_template_fields = data.get("template_fields")
     if isinstance(raw_template_fields, dict):
@@ -196,7 +212,8 @@ def ai_extract_from_text(
         temperature=0.05,
         max_tokens=2500,
     )
-    return _apply_standard_output(content, source_file=source_file, template=tpl)
+    alert = _apply_standard_output(content, source_file=source_file, template=tpl)
+    return _ensure_domain_from_evidence(alert, body, tpl)
 
 
 def ai_extract_from_image(
@@ -213,7 +230,7 @@ def ai_extract_from_image(
     data_url = file_to_data_url(path)
     prompt = (
         build_template_prompt_section(tpl)
-        + "\n\n请识别截图中的安全告警信息，完成识别 + 字段提取 + 处置意见。"
+        + "\n\n请识别截图中的安全告警信息，完成识别 + 字段提取 + 处置意见。IOC、IOC域名、域名、URI、URL 或 host 中出现的域名/URL 必须填入 domain_url。"
         + "\nocr_text 填入你读到的关键文字。只给意见，不执行处置。"
     )
     if extra_text.strip():
@@ -232,7 +249,8 @@ def ai_extract_from_image(
         temperature=0.05,
         max_tokens=2800,
     )
-    return _apply_standard_output(content, source_file=str(path), template=tpl)
+    alert = _apply_standard_output(content, source_file=str(path), template=tpl)
+    return _ensure_domain_from_evidence(alert, alert.raw_text + "\n" + extra_text, tpl)
 
 
 def _html_to_text(raw: str) -> str:
@@ -407,7 +425,9 @@ def smart_extract(
                 )
             if not cfg.use_for_judge:
                 alert.notes = [n for n in alert.notes if not n.startswith("AI_ADVICE::")]
-            return _annotate_company_departments(alert)
+            return _annotate_company_departments(
+                _ensure_domain_from_evidence(alert, clean_text or alert.raw_text, tpl)
+            )
         except Exception as e:
             ai_error = str(e)
             if require_ai:
