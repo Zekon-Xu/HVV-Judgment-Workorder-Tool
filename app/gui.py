@@ -89,6 +89,7 @@ from .template_store import (
     load_template,
     move_template_field,
     remove_template_field,
+    update_template_field,
     save_template,
     template_from_sample,
     sample_fields_from_text,
@@ -552,9 +553,19 @@ class TemplateTextDialog(ctk.CTkToplevel):
 class ManualFieldDialog(ctk.CTkToplevel):
     """Collect one field name and its initial value for a manual template."""
 
-    def __init__(self, master: tk.Misc, template_name: str) -> None:
+    def __init__(
+        self,
+        master: tk.Misc,
+        template_name: str,
+        *,
+        initial_label: str = "",
+        initial_value: str = "",
+        initial_rows: int = 1,
+        initial_options: list[str] | None = None,
+        editing: bool = False,
+    ) -> None:
         super().__init__(master)
-        self.title("添加模板字段")
+        self.title("编辑模板字段" if editing else "添加模板字段")
         self.geometry("520x350")
         self.minsize(460, 300)
         self.transient(master)
@@ -563,8 +574,8 @@ class ManualFieldDialog(ctk.CTkToplevel):
         ctk.CTkLabel(self, text=f"向“{template_name}”添加字段", font=ctk.CTkFont(size=17, weight="bold")).pack(
             anchor="w", padx=20, pady=(18, 14)
         )
-        self.name_var = ctk.StringVar()
-        self.value_var = ctk.StringVar()
+        self.name_var = ctk.StringVar(value=initial_label)
+        self.value_var = ctk.StringVar(value=initial_value)
         for label, variable, hint in (
             ("字段名", self.name_var, "例如：攻击次数"),
             ("字段值", self.value_var, "可留空，稍后在字段行填写"),
@@ -579,12 +590,12 @@ class ManualFieldDialog(ctk.CTkToplevel):
         options_row = ctk.CTkFrame(self, fg_color="transparent")
         options_row.pack(fill="x", padx=20, pady=5)
         ctk.CTkLabel(options_row, text="行数", width=64, anchor="w").pack(side="left")
-        self.rows_var = ctk.StringVar(value="1")
+        self.rows_var = ctk.StringVar(value=str(max(1, min(12, int(initial_rows or 1)))))
         ctk.CTkComboBox(
             options_row, variable=self.rows_var, values=[str(i) for i in range(1, 13)],
             state="readonly", width=90, corner_radius=8,
         ).pack(side="left")
-        self.options_enabled_var = ctk.BooleanVar(value=False)
+        self.options_enabled_var = ctk.BooleanVar(value=bool(initial_options))
         ctk.CTkCheckBox(
             options_row, text="使用自定义选项下拉框",
             variable=self.options_enabled_var, command=self._toggle_options,
@@ -596,9 +607,13 @@ class ManualFieldDialog(ctk.CTkToplevel):
         self._actions_frame = actions
         actions.pack(fill="x", padx=20, pady=(16, 18))
         ctk.CTkButton(actions, text="取消", width=88, height=34, corner_radius=8, fg_color="#596579", command=self.destroy).pack(side="right")
-        ctk.CTkButton(actions, text="添加字段", width=104, height=34, corner_radius=8, command=self._submit).pack(side="right", padx=(0, 8))
+        ctk.CTkButton(actions, text="保存字段" if editing else "添加字段", width=104, height=34, corner_radius=8, command=self._submit).pack(side="right", padx=(0, 8))
         self.bind("<Escape>", lambda _event: self.destroy())
         self.protocol("WM_DELETE_WINDOW", self.destroy)
+        if initial_options:
+            self._toggle_options()
+            if self.options_box is not None:
+                self.options_box.insert("1.0", "\n".join(initial_options))
         self.after(50, self._activate)
 
     def _activate(self) -> None:

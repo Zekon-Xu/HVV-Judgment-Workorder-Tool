@@ -314,6 +314,96 @@ def add_manual_template_field(
     return save_template(template, target), enrich_template_runtime(template)
 
 
+def update_template_field(
+    path_or_name: str | Path,
+    old_label: str,
+    new_label: str,
+    value: str = "",
+    *,
+    rows: int = 1,
+    options: list[str] | None = None,
+) -> tuple[Path, dict[str, Any]]:
+    """Edit one template field without changing its position or binding."""
+    old_label = str(old_label or "").strip()
+    new_label = str(new_label or "").strip()
+    if not new_label:
+        raise ValueError("字段名不能为空")
+    if len(new_label) > 80:
+        raise ValueError("字段名不能超过 80 个字符")
+    try:
+        rows = max(1, min(12, int(rows)))
+    except (TypeError, ValueError) as exc:
+        raise ValueError("字段行数必须是 1 到 12 的整数") from exc
+    cleaned_options: list[str] = []
+    for option in options or []:
+        option = str(option or "").strip()
+        if option and option not in cleaned_options:
+            cleaned_options.append(option)
+    if len(cleaned_options) > 30:
+        raise ValueError("自定义选项最多 30 个")
+    if any(len(option) > 120 for option in cleaned_options):
+        raise ValueError("自定义选项不能超过 120 个字符")
+
+    template = load_template(path_or_name)
+    schema = dict(template.get("field_schema") or {})
+    if old_label not in schema:
+        raise ValueError(f"字段“{old_label}”不存在")
+    if new_label != old_label and new_label in schema:
+        raise ValueError(f"字段“{new_label}”已存在")
+    template["field_schema"] = {
+        (new_label if label == old_label else label):
+        (new_label if label == old_label and mapped == old_label else mapped)
+        for label, mapped in schema.items()
+    }
+
+    current_value = str(value or "").strip()
+    if cleaned_options and current_value not in cleaned_options:
+        current_value = cleaned_options[0]
+    samples = dict(template.get("sample_fields") or {})
+    samples.pop(old_label, None)
+    template["sample_fields"] = {
+        label: (current_value if label == new_label else samples.get(label, ""))
+        for label in template["field_schema"]
+    }
+
+    field_rows = dict(template.get("field_rows") or {})
+    field_rows.pop(old_label, None)
+    field_rows[new_label] = rows
+    template["field_rows"] = field_rows
+    field_options = dict(template.get("field_options") or {})
+    field_options.pop(old_label, None)
+    if cleaned_options:
+        field_options[new_label] = cleaned_options
+    template["field_options"] = field_options
+
+    bindings = dict(template.get("field_bindings") or {})
+    prior_binding = bindings.pop(old_label, "")
+    if prior_binding:
+        bindings[new_label] = prior_binding
+    template["field_bindings"] = bindings
+    aliases = dict(template.get("field_aliases") or {})
+    prior_aliases = aliases.pop(old_label, None)
+    if prior_aliases is not None:
+        aliases[new_label] = prior_aliases
+    template["field_aliases"] = aliases
+
+    replacement = f"{new_label}：{current_value}"
+    pattern = re.compile(rf"^\s*{re.escape(old_label)}\s*(?:：|:|=).*$")
+    lines = str(template.get("sample_text") or "").splitlines()
+    replaced = False
+    for index, line in enumerate(lines):
+        if pattern.match(line):
+            lines[index] = replacement
+            replaced = True
+            break
+    if not replaced:
+        lines.append(replacement)
+    template["sample_text"] = "\n".join(lines).strip()
+
+    target = _template_storage_path(path_or_name, template)
+    return save_template(template, target), enrich_template_runtime(template)
+
+
 def _template_storage_path(path_or_name: str | Path, template: dict[str, Any]) -> Path:
     requested = Path(path_or_name)
     if requested.is_file():
