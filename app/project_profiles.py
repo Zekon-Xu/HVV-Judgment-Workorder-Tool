@@ -102,6 +102,29 @@ def _read_whitelist() -> dict[str, Any]:
     return {"version": 1, "description": "白名单", "rules": []}
 
 
+def _read_company_networks() -> dict[str, Any]:
+    """Read the active project's company-network data for portable export.
+
+    ``company_networks_blank`` is a runtime safeguard used by a blank
+    workspace.  It must not hide real rules already stored in the active
+    project when the user saves a new project bundle.
+    """
+    project_path = active_company_profile_path()
+    if project_path:
+        try:
+            payload = json.loads(project_path.read_text(encoding="utf-8"))
+            if isinstance(payload, dict) and isinstance(payload.get("company_networks"), dict):
+                return payload["company_networks"]
+        except Exception:
+            pass
+    return {
+        "version": 1,
+        "description": "工单涉及的内网部门判断库（仅用于归属判断，不是白名单）",
+        "source": DEFAULT_COMPANY_SOURCE,
+        "rules": current_company_rules(),
+    }
+
+
 def _read_history_cache() -> Any:
     project_path = active_company_profile_path()
     if project_path:
@@ -159,7 +182,7 @@ def save_project_profile(
             "version": 1,
             "description": "工单涉及的内网部门判断库（仅用于归属判断，不是白名单）",
             "source": DEFAULT_COMPANY_SOURCE,
-            "rules": current_company_rules() if include_company_networks else [],
+            "rules": (_read_company_networks().get("rules") or []) if include_company_networks else [],
         },
         "templates": _read_templates(),
         "history_cache": _read_history_cache() if include_history else [],

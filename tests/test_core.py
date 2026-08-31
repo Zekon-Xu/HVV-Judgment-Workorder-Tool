@@ -624,6 +624,30 @@ class ProjectProfileTests(unittest.TestCase):
             self.assertEqual(data["history_cache"][0]["attack_ip"], "198.51.100.8")
             self.assertFalse(str(data["settings"]["ai_api_key"]).startswith("dpapi:"))
 
+    def test_save_project_bundle_preserves_active_company_networks(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp, self._patch_paths(Path(tmp)):
+            root = Path(tmp)
+            config = root / "config"
+            projects = config / "projects"
+            projects.mkdir(parents=True)
+            (config / "settings.json").write_text(
+                json.dumps({"active_project_profile": "当前项目", "company_networks_blank": True}, ensure_ascii=False),
+                encoding="utf-8",
+            )
+            active = projects / "当前项目.json"
+            active.write_text(json.dumps({
+                "name": "当前项目",
+                "company_networks": {"version": 1, "rules": [
+                    {"rule": "10.20.0.0/16", "reason": "示例部门", "source": "手动"},
+                ]},
+            }, ensure_ascii=False), encoding="utf-8")
+            settings = deepcopy(DEFAULT_SETTINGS)
+            settings["active_project_profile"] = "当前项目"
+            path = project_profiles.save_project_profile("导出项目", settings)
+            data = json.loads(path.read_text(encoding="utf-8"))
+            self.assertEqual(data["company_networks"]["rules"][0]["rule"], "10.20.0.0/16")
+            self.assertEqual(data["company_networks"]["rules"][0]["reason"], "示例部门")
+
     def test_frozen_restart_uses_a_fresh_pyinstaller_temp_directory(self) -> None:
         with mock.patch.dict(os.environ, {
             "_PYI_APPLICATION_HOME_DIR": r"C:\Temp\_MEI123",
