@@ -46,7 +46,13 @@ from app.settings_store import (
     upsert_ai_profile,
 )
 from app.threatbook import ThreatBookClient, ThreatBookError, domain_report_url, indicator_type
-from app.whitelist import WhitelistEngine, check_alert_whitelist_gate, prune_redundant_single_ip_rules
+from app.whitelist import (
+    WhitelistEngine,
+    check_alert_whitelist_gate,
+    check_batch_whitelist,
+    parse_batch_ips,
+    prune_redundant_single_ip_rules,
+)
 from app.whitelist_import import extract_rules_from_file, merge_rules_from_file
 
 
@@ -651,6 +657,24 @@ class WhitelistTests(unittest.TestCase):
         path = root / "whitelist.json"
         path.write_text(json.dumps({"version": 1, "rules": rules or [], "manual": []}, ensure_ascii=False), encoding="utf-8")
         return WhitelistEngine(path)
+
+    def test_batch_ip_input_accepts_mixed_separators_and_deduplicates(self) -> None:
+        valid, invalid = parse_batch_ips(
+            "104.243.34.183\n8.130.187.143, 47.104.140.111 104.243.34.183"
+        )
+        self.assertEqual(valid, ["104.243.34.183", "8.130.187.143", "47.104.140.111"])
+        self.assertEqual(invalid, [])
+
+    def test_batch_whitelist_check_reports_only_unmatched_ips(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            engine = self._engine(Path(tmp), [{"rule": "104.243.34.0/24", "reason": "出口"}])
+            result = check_batch_whitelist(
+                engine, "104.243.34.183, 8.130.187.143 104.243.34.183\nnot-an-ip"
+            )
+        self.assertEqual(result.ips, ["104.243.34.183", "8.130.187.143"])
+        self.assertEqual(result.unmatched, ["8.130.187.143"])
+        self.assertEqual(result.matched[0]["rule"], "104.243.34.0/24")
+        self.assertEqual(result.invalid, ["not-an-ip"])
 
     def test_company_networks_only_attribute_departments(self) -> None:
         self.assertIsNone(company_network_match("10.2.18.9"))

@@ -95,7 +95,13 @@ from .template_store import (
 )
 from .threatbook import ThreatBookClient, ThreatBookError, domain_report_url, indicator_type
 from .tray_icon import TrayController
-from .whitelist import WhitelistEngine, check_alert_whitelist_gate, extract_indicators, extract_ips
+from .whitelist import (
+    WhitelistEngine,
+    check_alert_whitelist_gate,
+    check_batch_whitelist,
+    extract_indicators,
+    extract_ips,
+)
 from .whitelist_import import merge_rules_from_file
 
 IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".bmp", ".webp", ".gif", ".tif", ".tiff"}
@@ -1981,10 +1987,16 @@ class WorkOrderApp(ctk.CTk):
 
         self.wl_filter_var = ctk.StringVar()
         self.wl_filter_var.trace_add("write", lambda *_: self._refresh_whitelist_list())
+        filter_row = ctk.CTkFrame(self.whitelist_manager, fg_color="transparent")
+        filter_row.pack(fill="x", pady=(8, 0))
         ctk.CTkEntry(
-            self.whitelist_manager, textvariable=self.wl_filter_var, placeholder_text="输入 IP/CIDR/规则/单位；IP 会按网段匹配",
+            filter_row, textvariable=self.wl_filter_var, placeholder_text="输入 IP/CIDR/规则/单位；IP 会按网段匹配",
             corner_radius=8,
-        ).pack(fill="x", pady=(8, 0))
+        ).pack(side="left", fill="x", expand=True, padx=(0, 6))
+        ctk.CTkButton(
+            filter_row, text="批量检测", width=86, corner_radius=8,
+            command=self._open_batch_whitelist_check,
+        ).pack(side="left")
         self.wl_list = ctk.CTkTextbox(
             self.whitelist_manager, corner_radius=8, border_width=1,
             font=ctk.CTkFont(family="Consolas", size=12),
@@ -4474,6 +4486,64 @@ class WorkOrderApp(ctk.CTk):
         self.wl_list.insert("1.0", "\n".join(lines) if lines else "（没有匹配的规则）")
         self.wl_list.configure(state="disabled")
         self.wl_count.configure(text=_record_count_text(len(entries), len(rows) if query else None) + f"，已选 {len(self._whitelist_selected_rules)} 条")
+
+    def _open_batch_whitelist_check(self) -> None:
+        """Open a multi-line IP input dialog and report whitelist misses."""
+        dialog = ctk.CTkToplevel(self)
+        dialog.title("批量检测白名单")
+        dialog.geometry("560x520")
+        dialog.minsize(480, 420)
+        dialog.transient(self)
+
+        ctk.CTkLabel(
+            dialog, text="粘贴待检测 IP（支持换行、逗号、空格、分号混合分隔）",
+            anchor="w",
+        ).pack(fill="x", padx=18, pady=(16, 8))
+        input_box = ctk.CTkTextbox(dialog, height=170, corner_radius=8, border_width=1)
+        input_box.pack(fill="x", padx=18)
+        current = self.wl_filter_var.get().strip()
+        if current:
+            input_box.insert("1.0", current)
+
+        result_box = ctk.CTkTextbox(dialog, corner_radius=8, border_width=1, state="disabled")
+        result_box.pack(fill="both", expand=True, padx=18, pady=(12, 10))
+
+        def show_result() -> None:
+            result = check_batch_whitelist(self.wl, input_box.get("1.0", "end"))
+            lines = [f"共识别 {len(result.ips)} 个有效 IP · 命中 {len(result.matched)} · 未命中 {len(result.unmatched)}"]
+            if result.unmatched:
+                lines.extend(["", "未命中白名单：", *result.unmatched])
+            else:
+                lines.extend(["", "所有有效 IP 均命中白名单。"])
+            if result.matched:
+                lines.extend(["", "命中规则：", *[
+                    f"{item['ip']} -> {item['rule']}" + (f"（{item['reason']}）" if item.get("reason") else "")
+                    for item in result.matched
+                ]])
+            if result.invalid:
+                lines.extend(["", "无法识别（未参与检测）：", *result.invalid])
+            text = "\n".join(lines)
+            result_box.configure(state="normal")
+            result_box.delete("1.0", "end")
+            result_box.insert("1.0", text)
+            result_box.configure(state="disabled")
+            if not result.ips:
+                messagebox.showwarning("批量白名单检测", "未识别到有效 IP，请检查输入内容。", parent=dialog)
+            elif result.unmatched:
+                messagebox.showwarning(
+                    "批量白名单检测",
+                    "以下 IP 未命中白名单：\n\n" + "\n".join(result.unmatched),
+                    parent=dialog,
+                )
+            else:
+                messagebox.showinfo("批量白名单检测", "输入的所有有效 IP 均已命中白名单。", parent=dialog)
+
+        button_row = ctk.CTkFrame(dialog, fg_color="transparent")
+        button_row.pack(fill="x", padx=18, pady=(0, 16))
+        ctk.CTkButton(button_row, text="检测", width=90, command=show_result).pack(side="right")
+        ctk.CTkButton(button_row, text="关闭", width=90, fg_color="#596579", hover_color="#485364", command=dialog.destroy).pack(side="right", padx=(0, 8))
+        dialog.grab_set()
+        input_box.focus_set()
 
     def _toggle_whitelist_row(self, event: tk.Event) -> str:
         try:

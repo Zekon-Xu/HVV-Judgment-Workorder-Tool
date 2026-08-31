@@ -424,6 +424,69 @@ def extract_ips(text: str) -> list[str]:
     return out
 
 
+def parse_batch_ips(text: str) -> tuple[list[str], list[str]]:
+    """Parse a manually pasted IP list and return ``(valid, invalid)``.
+
+    Newlines, commas (including Chinese punctuation), semicolons and spaces
+    are accepted as separators.  Valid addresses are normalized and
+    de-duplicated while preserving input order.  Invalid non-empty tokens are
+    returned separately so the UI can explain why they were not checked.
+    """
+    valid: list[str] = []
+    invalid: list[str] = []
+    seen_valid: set[str] = set()
+    seen_invalid: set[str] = set()
+    tokens = re.split(r"[,，、;；\s]+", str(text or "").strip())
+    for raw in tokens:
+        token = raw.strip().strip("[](){}<>\"'`，,;；")
+        if not token:
+            continue
+        candidates = [token]
+        # Also accept text such as ``IP: 192.0.2.1`` without making labels a
+        # requirement for the normal list format.
+        embedded = extract_ips(token)
+        if embedded and token not in embedded:
+            candidates = embedded
+        parsed_any = False
+        for candidate in candidates:
+            try:
+                normalized = str(ipaddress.ip_address(candidate))
+            except ValueError:
+                continue
+            parsed_any = True
+            if normalized not in seen_valid:
+                seen_valid.add(normalized)
+                valid.append(normalized)
+        if not parsed_any and token not in seen_invalid:
+            seen_invalid.add(token)
+            invalid.append(token)
+    return valid, invalid
+
+
+@dataclass
+class BatchWhitelistResult:
+    """Offline result for a manually entered batch IP whitelist check."""
+
+    ips: list[str]
+    matched: list[dict]
+    unmatched: list[str]
+    invalid: list[str]
+
+
+def check_batch_whitelist(engine: WhitelistEngine, text: str) -> BatchWhitelistResult:
+    """Check every valid IP in a manually pasted batch against ``engine``."""
+    ips, invalid = parse_batch_ips(text)
+    matched: list[dict] = []
+    unmatched: list[str] = []
+    for ip in ips:
+        result = engine.check(ip)
+        if result.matched:
+            matched.append({"ip": ip, "rule": result.rule, "reason": result.reason})
+        else:
+            unmatched.append(ip)
+    return BatchWhitelistResult(ips, matched, unmatched, invalid)
+
+
 @dataclass
 class AllWhitelistResult:
     """日志中源IP/XFF/URL/目标IP 是否全部为白名单。"""
