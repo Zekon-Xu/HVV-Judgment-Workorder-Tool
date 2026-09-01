@@ -739,7 +739,7 @@ class FieldRow(ctk.CTkFrame):
         self.action_buttons: list[ctk.CTkButton] = []
         for index, (text, command) in enumerate(actions or []):
             button = ctk.CTkButton(
-                self, text=text, command=command, width=28, height=28,
+                self, text=text, command=command, width=(44 if text == "编辑" else 28), height=28,
                 corner_radius=6, font=ctk.CTkFont(size=13),
             )
             button.grid(row=0, column=index + 2, padx=(6 if index == 0 else 2, 0), pady=3)
@@ -2722,6 +2722,29 @@ class WorkOrderApp(ctk.CTk):
         except Exception as exc:
             messagebox.showerror("添加字段失败", str(exc))
 
+    def _edit_template_field(self, label: str) -> None:
+        name = self.template_var.get().strip() or BUILTIN_TEMPLATE_NAME
+        template = load_template(name)
+        rows = int((template.get("field_rows") or {}).get(label, 3 if self._template_bindings.get(label) == "advice" else 1))
+        options = list((template.get("field_options") or {}).get(label) or [])
+        current = self._template_rows.get(label).get() if label in self._template_rows else str((template.get("sample_fields") or {}).get(label) or "")
+        dialog = ManualFieldDialog(
+            self, name, initial_label=label, initial_value=current,
+            initial_rows=rows, initial_options=options, editing=True,
+        )
+        self.wait_window(dialog)
+        if dialog.result is None:
+            return
+        new_label, value, new_rows, new_options = dialog.result
+        try:
+            _path, updated = update_template_field(
+                name, label, new_label, value, rows=new_rows, options=new_options,
+            )
+            self._apply_template_edit(updated)
+            Toast(self, f"已更新字段“{new_label}”", "ok", 1600)
+        except Exception as exc:
+            messagebox.showerror("编辑字段失败", str(exc))
+
     def _remove_template_field(self, label: str) -> None:
         name = self.template_var.get().strip() or BUILTIN_TEMPLATE_NAME
         if not messagebox.askyesno("删除字段", f"从模板“{name}”删除字段“{label}”？"):
@@ -2849,6 +2872,7 @@ class WorkOrderApp(ctk.CTk):
                 width=360,
                 height=78 if kind == "text" else 34,
                 actions=[
+                    ("编辑", lambda field=name: self._edit_template_field(field)),
                     ("↑", lambda field=name: self._move_template_field(field, -1)),
                     ("↓", lambda field=name: self._move_template_field(field, 1)),
                     ("×", lambda field=name: self._remove_template_field(field)),
