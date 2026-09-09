@@ -37,6 +37,15 @@ else:
     )
 bundle_original_whitelist = bundle_defaults / "original_whitelist.json"
 shutil.copy2(bundle_whitelist, bundle_original_whitelist)
+bundle_disposed_ips = bundle_defaults / "disposed_ips.json"
+source_disposed_ips = root / "settings" / "disposed_ips.json"
+if source_disposed_ips.is_file():
+    shutil.copy2(source_disposed_ips, bundle_disposed_ips)
+else:
+    bundle_disposed_ips.write_text(
+        json.dumps({"version": 1, "description": "已处置 IP 索引", "ips": []}, ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8",
+    )
 bundle_templates = bundle_defaults / "templates"
 bundle_templates.mkdir(parents=True, exist_ok=True)
 from app.template_store import DEFAULT_TEMPLATE
@@ -49,6 +58,7 @@ datas = [
     (str(bundle_settings), "settings"),
     (str(bundle_whitelist), "settings"),
     (str(bundle_original_whitelist), "config"),
+    (str(bundle_disposed_ips), "settings"),
     (str(bundle_template), "settings/templates"),
 ]
 

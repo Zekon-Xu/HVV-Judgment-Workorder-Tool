@@ -30,6 +30,12 @@ from .branding import load_logo_ctk
 from .company_networks import CompanyNetworkStore, extract_company_rules_from_file
 from .drop_support import FileDropTarget
 from .default_whitelist import company_attribution_lines, company_network_match
+from .disposed import (
+    disposed_ips_from_records,
+    load_disposed_ips,
+    filter_disposed_ips,
+    refresh_disposed_index,
+)
 from .constants import (
     ALERT_LEVELS,
     APP_DISPLAY_NAME,
@@ -4245,8 +4251,27 @@ class WorkOrderApp(ctk.CTk):
         if path and Path(path).exists():
             try:
                 self.history.reload_from_xlsx(path)
+                self._refresh_disposed_index(path)
             except Exception:
                 pass
+
+    def _refresh_disposed_index(self, path: str) -> None:
+        """Rebuild Excel-derived disposition data while retaining manual entries."""
+        payload: dict[str, Any] = {}
+        try:
+            from .constants import CONFIG_DIR
+            import json as _json
+
+            saved = CONFIG_DIR / "disposed_ips.json"
+            if saved.is_file():
+                raw = _json.loads(saved.read_text(encoding="utf-8"))
+                manual = raw.get("manual_ips", []) if isinstance(raw, dict) else []
+            else:
+                manual = []
+        except (OSError, ValueError, TypeError):
+            manual = []
+        payload = refresh_disposed_index(path, manual_ips=manual)
+        self._disposed_refresh_summary = payload
 
     def _reload_history(self) -> None:
         path = self.history_var.get().strip()
@@ -4255,9 +4280,12 @@ class WorkOrderApp(ctk.CTk):
             return
         try:
             n = self.history.reload_from_xlsx(path)
+            self._refresh_disposed_index(path)
             self.settings["history_xlsx"] = path
             save_settings(self.settings)
-            self.cfg_status.configure(text=f"已载入历史记录 {n} 条")
+            summary = getattr(self, "_disposed_refresh_summary", {})
+            disposed_count = int(summary.get("ip_count") or 0)
+            self.cfg_status.configure(text=f"已载入历史记录 {n} 条，已处置 IP 索引 {disposed_count} 条")
             Toast(self, f"历史 {n} 条已载入", "ok")
         except Exception as e:
             messagebox.showerror("载入失败", str(e))
@@ -4527,7 +4555,7 @@ class WorkOrderApp(ctk.CTk):
         self.wl_count.configure(text=_record_count_text(len(entries), len(rows) if query else None) + f"，已选 {len(self._whitelist_selected_rules)} 条")
 
     def _open_batch_whitelist_check(self) -> None:
-        """Open a multi-line IP input dialog and report whitelist misses."""
+        """Open a multi-line IP dialog for whitelist checks and disposition filtering."""
         dialog = ctk.CTkToplevel(self)
         dialog.title("批量检测白名单")
         dialog.geometry("560x520")
@@ -4547,6 +4575,12 @@ class WorkOrderApp(ctk.CTk):
         result_box = ctk.CTkTextbox(dialog, corner_radius=8, border_width=1, state="disabled")
         result_box.pack(fill="both", expand=True, padx=18, pady=(12, 10))
 
+        def render(text: str) -> None:
+            result_box.configure(state="normal")
+            result_box.delete("1.0", "end")
+            result_box.insert("1.0", text)
+            result_box.configure(state="disabled")
+
         def show_result() -> None:
             result = check_batch_whitelist(self.wl, input_box.get("1.0", "end"))
             lines = [f"共识别 {len(result.ips)} 个有效 IP · 命中 {len(result.matched)} · 未命中 {len(result.unmatched)}"]
@@ -4562,10 +4596,7 @@ class WorkOrderApp(ctk.CTk):
             if result.invalid:
                 lines.extend(["", "无法识别（未参与检测）：", *result.invalid])
             text = "\n".join(lines)
-            result_box.configure(state="normal")
-            result_box.delete("1.0", "end")
-            result_box.insert("1.0", text)
-            result_box.configure(state="disabled")
+            render(text)
             if not result.ips:
                 messagebox.showwarning("批量白名单检测", "未识别到有效 IP，请检查输入内容。", parent=dialog)
             elif result.unmatched:
@@ -4577,9 +4608,34 @@ class WorkOrderApp(ctk.CTk):
             else:
                 messagebox.showinfo("批量白名单检测", "输入的所有有效 IP 均已命中白名单。", parent=dialog)
 
+        def show_disposed() -> None:
+            disposed = load_disposed_ips() | disposed_ips_from_records(self.history.records)
+            result = filter_disposed_ips(input_box.get("1.0", "end"), disposed)
+            lines = [
+                f"共识别 {len(result['ips'])} 个有效 IP · 已处置 {len(result['disposed'])} · 待处置 {len(result['pending'])}",
+                "",
+                "待处置（未在历史封禁索引中）：",
+                *(result["pending"] or ["无"]),
+                "",
+                "已处置（历史处置建议含‘封禁’）：",
+                *(result["disposed"] or ["无"]),
+            ]
+            if result["invalid"]:
+                lines.extend(["", "无法识别（未参与检测）：", *result["invalid"]])
+            render("\n".join(lines))
+            if not result["ips"]:
+                messagebox.showwarning("已处置 IP 过滤", "未识别到有效 IP，请检查输入内容。", parent=dialog)
+            else:
+                messagebox.showinfo(
+                    "已处置 IP 过滤",
+                    f"已处置 {len(result['disposed'])} 个，待处置 {len(result['pending'])} 个。",
+                    parent=dialog,
+                )
+
         button_row = ctk.CTkFrame(dialog, fg_color="transparent")
         button_row.pack(fill="x", padx=18, pady=(0, 16))
-        ctk.CTkButton(button_row, text="检测", width=90, command=show_result).pack(side="right")
+        ctk.CTkButton(button_row, text="过滤已处置", width=112, command=show_disposed).pack(side="right")
+        ctk.CTkButton(button_row, text="检测白名单", width=112, command=show_result).pack(side="right", padx=(0, 8))
         ctk.CTkButton(button_row, text="关闭", width=90, fg_color="#596579", hover_color="#485364", command=dialog.destroy).pack(side="right", padx=(0, 8))
         dialog.grab_set()
         input_box.focus_set()

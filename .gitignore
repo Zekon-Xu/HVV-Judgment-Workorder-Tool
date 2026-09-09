@@ -1,4 +1,5 @@
 settings/history_cache.json
+settings/disposed_ips.json
 settings/whitelist.json
 settings/original_whitelist.json
 settings/settings.json

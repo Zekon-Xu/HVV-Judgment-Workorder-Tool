@@ -20,6 +20,7 @@ from app.ai_extract import SYSTEM_EXTRACT, _apply_standard_output, local_extract
 from app.batch_engine import jobs_from_paths, jobs_from_text_blob, process_batch
 from app.company_networks import CompanyNetworkStore, extract_company_rules_from_file
 from app.default_whitelist import company_attribution_lines, company_network_match
+from app.disposed import extract_disposed_ips_from_xlsx, filter_disposed_ips, refresh_disposed_index
 from app import project_profiles
 from app.extractor import file_to_text, parse_local_file, parse_text
 from app.history import HistoryStore
@@ -57,6 +58,30 @@ from app.whitelist_import import extract_rules_from_file, merge_rules_from_file
 
 
 class GuiInteractionTests(unittest.TestCase):
+    def test_disposed_ip_filter_keeps_pending_addresses(self) -> None:
+        result = filter_disposed_ips(
+            "74.235.188.75, 192.0.2.10\n74.235.188.75 invalid-token",
+            {"74.235.188.75"},
+        )
+        self.assertEqual(result["disposed"], ["74.235.188.75"])
+        self.assertEqual(result["pending"], ["192.0.2.10"])
+        self.assertIn("invalid-token", result["invalid"])
+
+    def test_disposed_index_rebuilds_from_latest_workbook_and_keeps_manual(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "history.xlsx"
+            workbook = Workbook()
+            sheet = workbook.active
+            sheet.append(["序号", "编号", "攻击IP", "处置建议"])
+            sheet.append([1, "0801-001", "203.0.113.8", "封禁203.0.113.8"])
+            workbook.save(path)
+            ips, rows, sheets = extract_disposed_ips_from_xlsx(path)
+            self.assertEqual((ips, rows, sheets), ({"203.0.113.8"}, 1, 1))
+            with mock.patch("app.disposed.DISPOSED_IPS_PATH", Path(tmp) / "disposed.json"):
+                payload = refresh_disposed_index(path, manual_ips=["198.51.100.2"])
+            self.assertEqual(payload["ip_count"], 2)
+            self.assertEqual(set(payload["manual_ips"]), {"198.51.100.2"})
+
     def test_record_count_text_matches_configuration_copy(self) -> None:
         self.assertEqual(_record_count_text(153, note="（仅用于判断内网IP归属）"), "共 153 条记录（仅用于判断内网IP归属）")
         self.assertEqual(_record_count_text(78, 12), "共 78 条记录，当前显示 12 条")

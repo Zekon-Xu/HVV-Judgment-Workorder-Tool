@@ -253,6 +253,16 @@ def ensure_runtime_files() -> None:
             shutil.copy2(src, SETTINGS_PATH)
         else:
             save_settings(deepcopy(DEFAULT_SETTINGS))
+    # Seed bundled data indexes on a fresh install. User-edited files are
+    # preserved and never overwritten.
+    for filename in ("whitelist.json", "disposed_ips.json"):
+        target = CONFIG_DIR / filename
+        source = bundled_config / filename
+        if not target.exists() and source.is_file():
+            try:
+                shutil.copy2(source, target)
+            except OSError:
+                pass
     # Project bundles belong under config too.  Copy bundled examples only
     # when absent so later user edits and locally saved project packages win.
     bundled_profiles = bundled_config / "projects"
