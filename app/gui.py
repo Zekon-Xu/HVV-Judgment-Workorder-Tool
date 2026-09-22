@@ -27,7 +27,7 @@ import customtkinter as ctk
 from PIL import Image, ImageDraw, ImageTk
 
 from .branding import load_logo_ctk
-from .company_networks import CompanyNetworkStore, extract_company_rules_from_file
+from .company_networks import CompanyNetworkStore, check_batch_company_networks, extract_company_rules_from_file
 from .drop_support import FileDropTarget
 from .default_whitelist import company_attribution_lines, company_network_match
 from .disposed import (
@@ -440,6 +440,10 @@ class HistoryBrowserDialog(ctk.CTkToplevel):
             corner_radius=8,
         )
         self.search_entry.pack(side="left", fill="x", expand=True)
+        ctk.CTkButton(
+            search_row, text="一键清空", width=86, fg_color="#596579",
+            hover_color="#485364", command=lambda: self.search_var.set(""),
+        ).pack(side="left", padx=(8, 0))
         ctk.CTkButton(search_row, text="查看完整字段", width=130, command=self._show_exact).pack(side="left", padx=(8, 0))
         ctk.CTkButton(search_row, text="关闭", width=82, fg_color="#596579", command=self.destroy).pack(side="left", padx=(8, 0))
         self.status = ctk.CTkLabel(self, text="", anchor="w")
@@ -2023,6 +2027,11 @@ class WorkOrderApp(ctk.CTk):
             filter_row, text="批量检测", width=86, corner_radius=8,
             command=self._open_batch_whitelist_check,
         ).pack(side="left")
+        ctk.CTkButton(
+            filter_row, text="一键清空", width=86, corner_radius=8,
+            fg_color="#596579", hover_color="#485364",
+            command=lambda: self.wl_filter_var.set(""),
+        ).pack(side="left", padx=(6, 0))
         self.wl_list = ctk.CTkTextbox(
             self.whitelist_manager, corner_radius=8, border_width=1,
             font=ctk.CTkFont(family="Consolas", size=12),
@@ -2083,10 +2092,21 @@ class WorkOrderApp(ctk.CTk):
 
         self.company_filter_var = ctk.StringVar()
         self.company_filter_var.trace_add("write", lambda *_: self._refresh_company_list())
+        company_filter_row = ctk.CTkFrame(self.company_manager, fg_color="transparent")
+        company_filter_row.pack(fill="x", pady=(8, 0))
         ctk.CTkEntry(
             self.company_manager, textvariable=self.company_filter_var,
             placeholder_text="筛选公司网段 / 部门名称", corner_radius=8,
-        ).pack(fill="x", pady=(8, 0))
+        ).pack(side="left", fill="x", expand=True)
+        ctk.CTkButton(
+            company_filter_row, text="批量检测", width=86, corner_radius=8,
+            command=self._open_batch_company_check,
+        ).pack(side="left", padx=(6, 0))
+        ctk.CTkButton(
+            company_filter_row, text="一键清空", width=86, corner_radius=8,
+            fg_color="#596579", hover_color="#485364",
+            command=lambda: self.company_filter_var.set(""),
+        ).pack(side="left", padx=(6, 0))
         self.company_list = ctk.CTkTextbox(
             self.company_manager, corner_radius=8, border_width=1,
             font=ctk.CTkFont(family="Consolas", size=12),
@@ -4676,6 +4696,66 @@ class WorkOrderApp(ctk.CTk):
         ctk.CTkButton(button_row, text="过滤已处置", width=112, command=show_disposed).pack(side="right")
         ctk.CTkButton(button_row, text="检测白名单", width=112, command=show_result).pack(side="right", padx=(0, 8))
         ctk.CTkButton(button_row, text="关闭", width=90, fg_color="#596579", hover_color="#485364", command=dialog.destroy).pack(side="right", padx=(0, 8))
+        dialog.grab_set()
+        input_box.focus_set()
+
+    def _open_batch_company_check(self) -> None:
+        """Check pasted IPs against the editable company-network attribution table."""
+        dialog = ctk.CTkToplevel(self)
+        dialog.title("批量检测公司网段")
+        dialog.geometry("560x520")
+        dialog.minsize(480, 420)
+        dialog.transient(self)
+        ctk.CTkLabel(
+            dialog, text="粘贴待检测 IP（支持换行、逗号、空格、分号混合分隔）", anchor="w",
+        ).pack(fill="x", padx=18, pady=(16, 8))
+        input_box = ctk.CTkTextbox(dialog, height=170, corner_radius=8, border_width=1)
+        input_box.pack(fill="x", padx=18)
+        current = self.company_filter_var.get().strip()
+        if current:
+            input_box.insert("1.0", current)
+        result_box = ctk.CTkTextbox(dialog, corner_radius=8, border_width=1, state="disabled")
+        result_box.pack(fill="both", expand=True, padx=18, pady=(12, 10))
+
+        def render(text: str) -> None:
+            result_box.configure(state="normal")
+            result_box.delete("1.0", "end")
+            result_box.insert("1.0", text)
+            result_box.configure(state="disabled")
+
+        def show_result() -> None:
+            result = check_batch_company_networks(input_box.get("1.0", "end"), CompanyNetworkStore().all_entries())
+            lines = [
+                f"共识别 {len(result['ips'])} 个有效 IP · 命中 {len(result['matched'])} · 未命中 {len(result['unmatched'])}",
+            ]
+            if result["matched"]:
+                lines.extend(["", "命中公司网段：", *[
+                    f"{item['ip']} -> {item['rule']}（{item['reason'] or '未填写公司名称'}）"
+                    for item in result["matched"]
+                ]])
+            if result["unmatched"]:
+                lines.extend(["", "未命中公司网段：", *result["unmatched"]])
+            if result["invalid"]:
+                lines.extend(["", "无法识别（未参与检测）：", *result["invalid"]])
+            render("\n".join(lines))
+            if not result["ips"]:
+                messagebox.showwarning("批量公司网段检测", "未识别到有效 IP，请检查输入内容。", parent=dialog)
+            elif result["unmatched"]:
+                messagebox.showwarning(
+                    "批量公司网段检测",
+                    "以下 IP 未命中公司网段：\n\n" + "\n".join(result["unmatched"]),
+                    parent=dialog,
+                )
+            else:
+                messagebox.showinfo("批量公司网段检测", "输入的所有有效 IP 均已匹配公司网段。", parent=dialog)
+
+        button_row = ctk.CTkFrame(dialog, fg_color="transparent")
+        button_row.pack(fill="x", padx=18, pady=(0, 16))
+        ctk.CTkButton(button_row, text="开始检测", width=112, command=show_result).pack(side="right")
+        ctk.CTkButton(
+            button_row, text="关闭", width=90, fg_color="#596579", hover_color="#485364",
+            command=dialog.destroy,
+        ).pack(side="right", padx=(0, 8))
         dialog.grab_set()
         input_box.focus_set()
 

@@ -15,6 +15,7 @@ from PIL import Image
 
 from app import default_whitelist as default_whitelist_module
 from app import settings_store, template_store, whitelist as whitelist_module
+from app.company_networks import check_batch_company_networks
 from app.ai_client import AIClient, AIClientError, AIConfig, detect_wire_api, file_to_data_url, normalize_base_url
 from app.ai_extract import SYSTEM_EXTRACT, _apply_standard_output, local_extract_text_or_html, smart_extract
 from app.batch_engine import jobs_from_paths, jobs_from_text_blob, process_batch
@@ -707,6 +708,18 @@ class ProjectProfileTests(unittest.TestCase):
 
 
 class WhitelistTests(unittest.TestCase):
+    def test_batch_company_network_check_reports_company_and_unmatched(self) -> None:
+        result = check_batch_company_networks(
+            "10.2.3.4, 10.3.1.8 192.0.2.1 invalid",
+            [
+                {"rule": "10.2.0.0/16", "reason": "中国港湾"},
+                {"rule": "10.3.0.0/16", "reason": "中国路桥"},
+            ],
+        )
+        self.assertEqual([item["reason"] for item in result["matched"]], ["中国港湾", "中国路桥"])
+        self.assertEqual(result["unmatched"], ["192.0.2.1"])
+        self.assertEqual(result["invalid"], ["invalid"])
+
     def setUp(self) -> None:
         self._settings_tmp = tempfile.TemporaryDirectory()
         settings_path = Path(self._settings_tmp.name) / "settings.json"

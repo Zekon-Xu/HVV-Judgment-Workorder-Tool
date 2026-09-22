@@ -267,3 +267,47 @@ class CompanyNetworkStore:
             })
         self._write(rules)
         return len(rules)
+
+
+def check_batch_company_networks(text: str, entries: list[dict[str, str]] | None = None) -> dict[str, list]:
+    """Match pasted IPs against the active company-network attribution rules."""
+    tokens = re.split(r"[,，;；\s\n]+", str(text or "").strip())
+    ips: list[str] = []
+    invalid: list[str] = []
+    seen: set[str] = set()
+    for token in tokens:
+        token = token.strip().strip("[](){}<>")
+        if not token:
+            continue
+        try:
+            address = str(ipaddress.ip_address(token))
+        except ValueError:
+            if token not in invalid:
+                invalid.append(token)
+            continue
+        if address not in seen:
+            seen.add(address)
+            ips.append(address)
+    rules = list(entries or current_company_rules())
+    matched: list[dict[str, str]] = []
+    unmatched: list[str] = []
+    for ip in ips:
+        address = ipaddress.ip_address(ip)
+        hit = None
+        for item in rules:
+            try:
+                network = ipaddress.ip_network(str(item.get("rule") or ""), strict=False)
+            except ValueError:
+                continue
+            if address in network:
+                hit = {
+                    "ip": ip,
+                    "rule": str(item.get("rule") or network),
+                    "reason": str(item.get("reason") or item.get("department") or ""),
+                }
+                break
+        if hit:
+            matched.append(hit)
+        else:
+            unmatched.append(ip)
+    return {"ips": ips, "matched": matched, "unmatched": unmatched, "invalid": invalid}
