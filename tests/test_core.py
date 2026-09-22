@@ -46,7 +46,7 @@ from app.settings_store import (
     normalize_ai_profiles,
     upsert_ai_profile,
 )
-from app.threatbook import ThreatBookClient, ThreatBookError, domain_report_url, indicator_type
+from app.threatbook import ThreatBookClient, ThreatBookError, domain_report_url, ip_report_url, indicator_type
 from app.whitelist import (
     WhitelistEngine,
     check_alert_whitelist_gate,
@@ -333,6 +333,19 @@ class ApiClientTests(unittest.TestCase):
 
 
 class ThreatBookTests(unittest.TestCase):
+    def test_ip_report_url_and_nested_malicious_verdict(self) -> None:
+        self.assertEqual(ip_report_url("20.46.255.14"), "https://x.threatbook.com/v5/ip/20.46.255.14")
+        response = mock.Mock(status_code=200)
+        response.json.return_value = {
+            "response_code": 0,
+            "data": {"20.46.255.14": {"severity": "中", "judgments": ["傀儡机", "垃圾邮件"]}},
+        }
+        settings = {"threatbook_enabled": True, "threatbook_api_key": "key", "threatbook_timeout": 5}
+        with mock.patch("app.threatbook.httpx.get", return_value=response):
+            result = ThreatBookClient(settings).lookup("20.46.255.14")
+        self.assertIn("恶意/高风险", result.summary)
+        self.assertNotIn("未发现明确风险结论", result.summary)
+
     def test_manual_indicator_input_is_split_and_deduplicated(self) -> None:
         self.assertEqual(
             _parse_indicator_input("198.51.100.8, 203.0.113.4\n198.51.100.8"),
@@ -434,6 +447,15 @@ class TemplateTests(unittest.TestCase):
             self.assertTrue(template_store.delete_template("临时模板"))
             with self.assertRaises(ValueError):
                 template_store.delete_template(template_store.BUILTIN_TEMPLATE_NAME)
+
+    def test_template_list_deduplicates_legacy_same_name_files(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp, self._patch_roots(Path(tmp)):
+            directory = template_store.ensure_templates_dir()
+            payload = {"name": "重复模板", "field_schema": {"字段": "值"}}
+            (directory / "legacy.json").write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+            (directory / "重复模板.json").write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+            names = [item["name"] for item in template_store.list_templates()]
+            self.assertEqual(names.count("重复模板"), 1)
 
     def test_manual_template_field_can_add_remove_and_reorder(self) -> None:
         with tempfile.TemporaryDirectory() as tmp, self._patch_roots(Path(tmp)):

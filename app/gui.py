@@ -100,7 +100,7 @@ from .template_store import (
     template_from_sample,
     sample_fields_from_text,
 )
-from .threatbook import ThreatBookClient, ThreatBookError, domain_report_url, indicator_type
+from .threatbook import ThreatBookClient, ThreatBookError, domain_report_url, ip_report_url, indicator_type
 from .tray_icon import TrayController
 from .whitelist import (
     WhitelistEngine,
@@ -375,15 +375,14 @@ class ThreatBookLookupDialog(ctk.CTkToplevel):
         shortcuts = ctk.CTkFrame(self, fg_color="transparent")
         shortcuts.pack(fill="both", expand=True, padx=14, pady=(0, 10))
         columns = 3
+        self.shortcut_vars: list[tuple[str, tk.BooleanVar]] = []
         for index, ip in enumerate(current_ips):
-            button = ctk.CTkButton(
-                shortcuts, text=ip, width=174, height=30, corner_radius=6,
-                fg_color="transparent", hover_color="#2d5e91",
-                text_color="#76b7ff", anchor="w",
-                font=ctk.CTkFont(size=13, underline=True),
-                command=lambda value=ip: self._choose(value),
-            )
-            button.grid(row=index // columns, column=index % columns, sticky="ew", padx=4, pady=3)
+            selected = tk.BooleanVar(value=True)
+            self.shortcut_vars.append((ip, selected))
+            ctk.CTkCheckBox(
+                shortcuts, text=ip, variable=selected, width=174, height=30,
+                hover_color="#2d5e91", text_color="#76b7ff", anchor="w",
+            ).grid(row=index // columns, column=index % columns, sticky="ew", padx=4, pady=3)
         for column in range(columns):
             shortcuts.grid_columnconfigure(column, weight=1)
         if not current_ips:
@@ -411,6 +410,8 @@ class ThreatBookLookupDialog(ctk.CTkToplevel):
 
     def _submit(self) -> None:
         indicators = _parse_indicator_input(self.input_var.get())
+        selected = [value for value, var in getattr(self, "shortcut_vars", []) if var.get()]
+        indicators = selected + [value for value in indicators if value not in selected]
         if not indicators:
             messagebox.showwarning("微步情报查询", "请输入至少一个 IP 或域名", parent=self)
             return
@@ -1380,6 +1381,10 @@ class WorkOrderApp(ctk.CTk):
         ctk.CTkButton(
             template_row, text="新增模板", width=78, height=30, corner_radius=6,
             command=self._save_current_template,
+        ).pack(side="left", padx=(0, 5))
+        ctk.CTkButton(
+            template_row, text="另存模板", width=78, height=30, corner_radius=6,
+            command=self._save_template_as,
         ).pack(side="left", padx=(0, 5))
         ctk.CTkButton(
             template_row, text="导入", width=54, height=30, corner_radius=6,
@@ -2947,6 +2952,31 @@ class WorkOrderApp(ctk.CTk):
 
         threading.Thread(target=worker, daemon=True).start()
 
+    def _save_template_as(self) -> None:
+        """Save the currently selected template under a new display name."""
+        source = load_template(self.template_var.get().strip() or None)
+        name = simpledialog.askstring("另存模板", "新模板名称：", parent=self)
+        name = str(name or "").strip()
+        if not name:
+            return
+        if name == BUILTIN_TEMPLATE_NAME:
+            messagebox.showwarning("模板名称", "内置模板不能覆盖，请使用其它名称")
+            return
+        if any(item["name"].casefold() == name.casefold() for item in list_templates()):
+            messagebox.showwarning("模板名称", f"模板“{name}”已存在，请使用其它名称")
+            return
+        source["name"] = name
+        try:
+            saved_path = save_template(source)
+            self.settings["active_template"] = name
+            save_settings(self.settings)
+            self._reload_templates()
+            self.template_var.set(name)
+            self._apply_template_to_fields(load_template(saved_path))
+            Toast(self, f"模板“{name}”已另存", "ok", 1800)
+        except Exception as exc:
+            messagebox.showerror("另存模板失败", str(exc))
+
     def _import_template(self) -> None:
         path = filedialog.askopenfilename(
             title="导入提取模板",
@@ -3581,6 +3611,13 @@ class WorkOrderApp(ctk.CTk):
                 parent=self,
         ):
             return
+        if len(selected) > 5 and not messagebox.askyesno(
+            "批量打开浏览器标签页",
+            f"本次将查询 {len(selected)} 个指标，并为每个指标打开一个浏览器标签页。\n\n"
+            "浏览器会多开标签页，请注意电脑性能情况。\n\n继续吗？",
+            parent=self,
+        ):
+            return
         self._sync_threatbook_settings_from_ui()
         snapshot = dict(self.settings)
         Toast(self, f"正在查询 {len(selected)} 个微步指标", "info", 1800)
@@ -3588,16 +3625,18 @@ class WorkOrderApp(ctk.CTk):
         def worker() -> None:
             lines: list[str] = []
             for indicator in selected:
+                kind = indicator_type(indicator)
+                permalink = domain_report_url(indicator) if kind == "domain" else ip_report_url(indicator)
+                try:
+                    browser_opened = bool(webbrowser.open(permalink, new=2))
+                except Exception:
+                    browser_opened = False
                 try:
                     result = ThreatBookClient(snapshot).lookup(indicator)
-                    if result.indicator_type == "domain":
-                        permalink = str(result.payload.get("permalink") or domain_report_url(indicator))
-                        webbrowser.open(permalink, new=2)
-                        lines.append(f"{result.indicator}\n已打开微步域名详情页：{permalink}")
-                    else:
-                        lines.append(result.display_text())
+                    lines.append(f"{result.indicator}\n已打开微步详情页：{permalink}\n{result.summary}")
                 except Exception as exc:
-                    lines.append(f"{indicator}\n查询失败：{exc}")
+                    state = "已打开详情页" if browser_opened else "详情页打开请求未确认"
+                    lines.append(f"{indicator}\n{state}：{permalink}\n查询失败：{exc}")
             content = "\n\n".join(lines)
             self.after(0, lambda: ReadOnlyTextDialog(self, "微步威胁情报", content))
 

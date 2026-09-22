@@ -174,11 +174,19 @@ def _safe_name(name: str) -> str:
 def list_templates() -> list[dict[str, Any]]:
     ensure_templates_dir()
     items: list[dict[str, Any]] = []
+    seen_names: set[str] = set()
     for path in sorted(TEMPLATES_DIR.glob("*.json")):
         try:
             data = _validate_template(json.loads(path.read_text(encoding="utf-8")))
+            name = str(data.get("name") or path.stem).strip()
+            name_key = name.casefold()
+            # A project import can leave both a legacy default.json and a
+            # user file with the same display name. Keep one menu entry.
+            if name_key in seen_names:
+                continue
+            seen_names.add(name_key)
             items.append({
-                "name": data.get("name") or path.stem,
+                "name": name,
                 "path": str(path),
                 "description": data.get("description", ""),
             })

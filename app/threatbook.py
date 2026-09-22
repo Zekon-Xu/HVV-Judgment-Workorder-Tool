@@ -22,6 +22,14 @@ def domain_report_url(value: str) -> str:
     return f"https://x.threatbook.com/v5/domain/{domain}"
 
 
+def ip_report_url(value: str) -> str:
+    """Return the public X intelligence page for a normalized IP."""
+    address = (value or "").strip()
+    if indicator_type(address) != "ip":
+        raise ThreatBookError("仅支持 IP 详情页查询")
+    return f"https://x.threatbook.com/v5/ip/{address}"
+
+
 class ThreatBookError(RuntimeError):
     pass
 
@@ -68,32 +76,54 @@ def _items(value: Any) -> list[str]:
     return []
 
 
+def _nested_values(data: Any, keys: set[str]) -> list[str]:
+    """Collect indicator evidence from API responses with versioned nesting."""
+    found: list[str] = []
+    if isinstance(data, dict):
+        for key, value in data.items():
+            if str(key).casefold() in keys:
+                found.extend(_items(value))
+            else:
+                found.extend(_nested_values(value, keys))
+    elif isinstance(data, list):
+        for value in data:
+            found.extend(_nested_values(value, keys))
+    return list(dict.fromkeys(item for item in found if item))
+
+
 def _summary(indicator: str, kind: str, payload: dict[str, Any]) -> str:
     data = payload.get("data") if isinstance(payload.get("data"), dict) else payload
-    if isinstance(data, dict) and kind == "domain":
-        # Domain analysis returns a map keyed by the queried domain.
+    if isinstance(data, dict) and kind in {"domain", "ip"}:
+        # Domain/IP analysis may return a map keyed by the queried indicator.
         nested = data.get(indicator) or data.get(indicator.rstrip(".").lower())
         if isinstance(nested, dict):
             data = nested
     if not isinstance(data, dict):
         return f"微步 {kind.upper()} 情报：接口返回格式异常，未形成可用结论"
-    judgments = _items(data.get("judgments"))
-    verdict = (
-        data.get("judgment") or data.get("verdict") or data.get("is_malicious")
-        or data.get("malicious") or data.get("severity") or data.get("risk_level") or "未发现明确风险结论"
+    judgments = _nested_values(data, {"judgments", "judgment", "verdict", "labels", "label", "classification"})
+    tags = _nested_values(data, {"tags", "scene", "scenes", "threat_type", "threat_types"})
+    verdict = next(
+        (value for key in ("judgment", "verdict", "is_malicious", "malicious", "risk_level", "severity")
+         for value in _items(data.get(key))),
+        "未发现明确风险结论",
     )
-    if verdict == "未发现明确风险结论" and judgments:
+    risk_words = ("恶意", "傀儡", "垃圾", "攻击", "黑", "风险", "钓鱼", "木马", "僵尸", "malicious", "botnet", "spam")
+    evidence = list(dict.fromkeys(judgments + tags))
+    if any(any(word.casefold() in item.casefold() for word in risk_words) for item in evidence):
+        verdict = "恶意/高风险（" + "、".join(dict.fromkeys(evidence[:8])) + "）"
+    elif verdict == "未发现明确风险结论" and judgments:
         verdict = "、".join(judgments)
-    tags = _items(data.get("tags") or data.get("scene"))[:6]
     parts = [f"微步 {kind.upper()} 情报：{indicator}，结论：{verdict}"]
     if tags:
-        parts.append("标签：" + "、".join(tags))
+        parts.append("标签：" + "、".join(tags[:6]))
     confidence = data.get("confidence") or data.get("confidence_level")
     if confidence is not None:
         parts.append(f"置信度：{confidence}")
     if kind == "domain":
         permalink = str(data.get("permalink") or f"https://x.threatbook.com/v5/domain/{indicator}")
         parts.append(f"详情：{permalink}")
+    elif kind == "ip":
+        parts.append(f"详情：{ip_report_url(indicator)}")
     return "；".join(parts)
 
 
